@@ -124,24 +124,22 @@ applyPatchIfExist origFilename patchFilename =
 data LocType = Url | Idx | File
 
 -- | Read in a Cabal file.
-readCabalFromUrl = readCabal
-readCabalFromFile = readCabal
-readCabalFromIdx pd (p, v) td = readCabal pd (p ++ "," ++ v) td
-
-readCabal :: FilePath -> String -> FilePath -> ErrorT String IO GenericPackageDescription
-readCabal patchDir loc tmpDir = let
-        locType
-            | isInfixOf "://" loc = Url
-            | ',' `elem` loc = Idx
-            | otherwise = File
-
-        copyCabal tmpDir loc = copyFile loc fn >> return fn
-            where fn = tmpDir </> takeFileName loc
-
-        downloadCabal tmpDir loc = getFromURL loc fn >> return fn
-            where
+readCabalFromUrl = readCabal downloadCabal
+    where
+        downloadCabal :: FilePath -> String -> ErrorT String IO FilePath
+        downloadCabal tmpDir loc = let
                 fn = tmpDir </> takeFileName loc
+            in (liftIO $ getFromURL loc fn) >> return fn
 
+readCabalFromFile = readCabal copyCabal
+    where
+        copyCabal :: FilePath -> String -> ErrorT String IO FilePath
+        copyCabal tmpDir loc = let
+                fn = tmpDir </> takeFileName loc
+            in (liftIO $ copyFile loc fn) >> return fn
+
+readCabalFromIdx pd (p, v) td = readCabal extractCabal pd (p ++ "," ++ v) td
+    where
         extractCabal tmpDir loc = let
                 (p, (_: v)) = span (/= ',') loc
                 path = p </> v </> p ++ ".cabal"
@@ -172,16 +170,14 @@ readCabal patchDir loc tmpDir = let
                 liftIO $ writeFile fn cbl
                 return fn
 
+readCabal getCabal patchDir loc tmpDir = let
         extractName fn = liftM name $ readPackageDescription silent fn
             where
                 packageName (PackageName s) = s
                 name = packageName . pkgName . package . packageDescription
 
     in do
-        cblFn <- case locType of
-            File -> liftIO $ copyCabal tmpDir loc
-            Idx -> extractCabal tmpDir loc
-            Url -> liftIO $ downloadCabal tmpDir loc
+        cblFn <- getCabal tmpDir loc
         pn <- liftIO $ extractName cblFn
         let patchFn = patchDir </> pn <.> "cabal"
         applyPatchIfExist cblFn patchFn
